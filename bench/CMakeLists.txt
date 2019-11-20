@@ -23,6 +23,21 @@ macro(add_benchmark BENCHNAME)
     target_compile_options(${BENCHNAME} PRIVATE
       "-DUSE_MKL")
   endif()
+  #if(DEFINED INTEL_MKLDNN_DIR) # TODO Find a condition based in INTEL_MKLDNN_DIR
+  #set(MKLDNN_LIBRARIES "${INTEL_MKLDNN_DIR}/src/libmkldnn.so")
+  #set(MKLDNN_INCLUDE_DIR "${INTEL_MKLDNN_DIR}/src/Headers")
+    set(MKLDNN_LIBRARIES "/home/huiwu1/workspace/int8/mkl-dnn/build/src/libmkldnn.so")
+    #set(MKLDNN_INCLUDE_DIR "/home/huiwu1/src/mkl-dnn/build/src/Headers")
+    set(MKLDNN_INCLUDE_DIR "/home/huiwu1/workspace/int8/mkl-dnn/include")
+    set(MKLDNN_INCLUDE_BUILD_DIR "/home/huiwu1/workspace/int8/mkl-dnn/build/include")
+    message(STATUS "MKLDNN_LIBRARIES= ${MKLDNN_LIBRARIES}")
+    target_include_directories(${BENCHNAME} PRIVATE "${MKLDNN_INCLUDE_DIR}")
+    target_include_directories(${BENCHNAME} PRIVATE "${MKLDNN_INCLUDE_BUILD_DIR}")
+    target_link_libraries(${BENCHNAME} "${MKLDNN_LIBRARIES}")
+    target_compile_options(${BENCHNAME} PRIVATE
+      "-DUSE_MKLDNN")
+  #endif()
+
   if (${BLAS_FOUND})
     message(STATUS "BLAS_LIBRARIES= ${BLAS_LIBRARIES}")
     target_compile_options(${BENCHNAME} PRIVATE "-DUSE_BLAS")

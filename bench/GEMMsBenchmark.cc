@@ -19,6 +19,11 @@
 #include <mkl.h>
 #endif
 
+#ifdef USE_MKLDNN
+#include <mkldnn.h>
+#include "gemm_pack.hpp"
+#endif
+
 #include "BenchUtils.h"
 #include "fbgemm/Fbgemm.h"
 #include "src/RefImplementations.h"
@@ -39,6 +44,72 @@ void performance_test() {
     {128, 128, 128},
     {256, 512, 256},
     {1024, 1024, 1024},
+
+    {156800, 4, 36},
+    {156800, 8, 36},
+    {156800, 16, 36},
+    {1, 128, 512},
+    {1, 1024, 256},
+    {1, 2048, 512},
+    {1, 4096, 1024},
+    {6, 256, 1024},
+    {6, 256, 2048},
+    {6, 512, 512},
+    {6, 1024, 256},
+    {6, 2048, 256},
+    {6, 2048, 512},
+    {6, 4096, 256},
+    {6, 4096, 1024},
+    {6, 4096, 2048},
+
+    {10, 2048, 256},
+    {10, 4096, 1024},
+
+    {20, 2048, 256},
+    {20, 4096, 1024},
+
+    {102, 1024, 512},
+    {102, 2323, 256},
+    {102, 512, 256},
+
+    {1, 800, 3200},
+    {1, 800, 8000},
+
+    {16, 256, 1500},
+    {16, 256, 1567},
+    {1, 128, 2876},
+    {16, 128, 1567},
+    {1, 128, 2722},
+#if 0
+    // benchdnn sizes
+    {1024, 1024, 1024},
+    {128, 128, 128},
+    {15, 6400, 141},
+    {211, 16, 2504},
+    {256, 16, 512},
+    {369, 16, 1434},
+    {512, 256, 256},
+    {768, 64, 512},
+    {800, 64, 320},
+    {8, 6400, 141},
+ #else
+    // FB sizes, mkldnn patch
+    {6400, 15, 141},
+    {6400, 8, 141},
+    {16, 211, 2504},
+    {16, 369, 1434},
+    {1, 1024, 3496},
+    {16, 256, 512},
+    {1, 1600, 3456},
+    // Inception_v3
+    {1, 2048, 1000},
+    // mask-rcnn-R-50-FPN-x1
+    {1000, 1024, 12544},
+    {1000, 1024, 1024},
+    {1000, 2, 1024},
+    {1000, 8, 1024},
+    // GEMMsTunableBenchmark
+#endif
   };
   // clang-format on
   bool flush = true;
@@ -68,6 +139,9 @@ void performance_test() {
     int m = shape[0];
     int n = shape[1];
     int k = shape[2];
+    const long int m_ = shape[0];
+    const long int n_ = shape[1];
+    const long int k_ = shape[2];
 
     float alpha = 1.f, beta = 0.f;
     aligned_vector<uint8_t> Aint8(m * k);
@@ -75,7 +149,14 @@ void performance_test() {
     aligned_vector<int8_t> Bint8(k * n);
 
     aligned_vector<float> Cfp32_mkl(m * n);
-    aligned_vector<int32_t> Cint32_mkl(Cfp32_mkl.size());
+    //aligned_vector<int32_t> Cint32_mkl(Cfp32_mkl.size());
+    aligned_vector<float> Cfp32_mkldnn(Cfp32_mkl.size());
+    aligned_vector<int32_t> Cint32_mkl(Cfp32_mkl.size());    // XXX Why do we need this?
+    aligned_vector<int32_t> Cint32_mkldnn(Cfp32_mkl.size()); // XXX Why do we need this?
+    aligned_vector<int32_t> Cint32_mkl_s8u8s32(Cfp32_mkl.size());
+    aligned_vector<int32_t> Cint32_mkl_packapi_s8u8s32(Cfp32_mkl.size());
+    aligned_vector<int32_t> Cint32_mkldnn_s8u8s32(Cfp32_mkl.size());
+    aligned_vector<int32_t> Cint32_mkldnn_packapi_s8u8s32(Cfp32_mkl.size());
     aligned_vector<int32_t> Cint32_ref(Cfp32_mkl.size());
     aligned_vector<int32_t> Cint32_fb_acc32(Cfp32_mkl.size());
     aligned_vector<int32_t> Cint32_fb_acc16(Cfp32_mkl.size());
@@ -92,6 +173,10 @@ void performance_test() {
     double nops = 2.0 * m * n * k;
     double ttot = 0.0;
     string runType;
+
+    matmul_u8i8acc32_ref(
+        m, n, k, k, n, n, Aint8.data(), Bint8.data(), Cint32_ref.data());
+
 #ifdef USE_MKL
     runType = "MKL_fp32";
     ttot = measureWithWarmup(
@@ -131,12 +216,244 @@ void performance_test() {
     for (auto i = 0; i < Cfp32_mkl.size(); ++i) {
       Cint32_mkl[i] = (int32_t)Cfp32_mkl[i];
     }
+
+    ttot = 0.0;
+    runType = "MKL_s8u8";
+    int32_t co[] = {0};
+    for (auto i = 0; i < NWARMUP + NITER; ++i) {
+      llc_flush(llc);
+      start = chrono::high_resolution_clock::now();
+      cblas_gemm_s8u8s32(
+          CblasRowMajor,
+          CblasNoTrans,
+          CblasNoTrans,
+          CblasFixOffset,
+          m,
+          n,
+          k,
+          alpha,
+          Aint8.data(),
+          k,
+          0, // A offset
+          Bint8.data(),
+          n,
+          0, // B offset
+          beta,
+          Cint32_mkl_s8u8s32.data(),
+          n,
+          co);
+      end = chrono::high_resolution_clock::now();
+      if (i >= NWARMUP) {
+        auto dur = chrono::duration_cast<chrono::nanoseconds>(end - start);
+        ttot += dur.count();
+      }
+    }
+    ((volatile char*)(llc.data()));
+
+    cout << setw(6) << m << ", " << setw(6) << n << ", " << setw(6) << k << ", "
+         << setw(16) << runType << ", "
+#ifdef FBGEMM_MEASURE_TIME_BREAKDOWN
+         << setw(16) << 0 << ", " << setw(16) << 0 << ", " << setw(16) << 0
+         << ", " << setw(16) << 0 << ", "
+#endif
+         << setw(5) << fixed << setw(5) << setprecision(1) << (static_cast<double>(NITER) * nops) / ttot
+         << endl;
+
+
+    //vector<int32_t> row_offsets(m);
+    compare_buffers(Cint32_ref.data(), Cint32_mkl_s8u8s32.data(), m, n, n, 5);
+
+    //matmul_u8i8acc32_ref(
+    //    m, n, k, k, n, n, Aint8.data(), Bint8.data(), Cint32_ref.data());
+    ttot = 0.0;
+    runType = "MKL_packapi_s8u8";
+
+    size_t packedBSize = cblas_gemm_s8u8s32_pack_get_size(CblasBMatrix,
+            m, n, k);
+    void *packedB = (void *) mkl_malloc(packedBSize, 64);
+    cblas_gemm_s8u8s32_pack(CblasRowMajor, CblasBMatrix, CblasNoTrans, m, n, k,
+            Bint8.data(), n, packedB);
+    // TODO Error handling.
+
+    for (auto i = 0; i < NWARMUP + NITER; ++i) {
+      llc_flush(llc);
+      start = chrono::high_resolution_clock::now();
+      cblas_gemm_s8u8s32_compute(
+          CblasRowMajor,
+          CblasNoTrans,
+          CblasPacked,
+          CblasFixOffset,
+          m,
+          n,
+          k,
+          alpha,
+          Aint8.data(),
+          k,
+          0, // A offset
+          packedB,
+          n,
+          0, // B offset
+          beta,
+          Cint32_mkl_packapi_s8u8s32.data(),
+          n,
+          co);
+      end = chrono::high_resolution_clock::now();
+      if (i >= NWARMUP) {
+        auto dur = chrono::duration_cast<chrono::nanoseconds>(end - start);
+        ttot += dur.count();
+      }
+    }
+    ((volatile char*)(llc.data()));
+
+    cout << setw(6) << m << ", " << setw(6) << n << ", " << setw(6) << k << ", "
+         << setw(16) << runType << ", "
+#ifdef FBGEMM_MEASURE_TIME_BREAKDOWN
+         << setw(16) << 0 << ", " << setw(16) << 0 << ", " << setw(16) << 0
+         << ", " << setw(16) << 0 << ", "
+#endif
+         << setw(5) << fixed << setw(5) << setprecision(1) << (static_cast<double>(NITER) * nops) / ttot
+         << endl;
+
+    mkl_free(packedB);
+    compare_buffers(Cint32_ref.data(), Cint32_mkl_packapi_s8u8s32.data(), m, n, n, 5);
+#endif
+
+#ifdef USE_MKLDNN
+    ttot = 0.0;
+    runType = "DNN_fp32";
+    for (auto i = 0; i < NWARMUP + NITER; ++i) {
+      llc_flush(llc);
+      start = chrono::high_resolution_clock::now();
+      mkldnn_sgemm(
+          'N',
+          'N',
+          m_,
+          n_,
+          k_,
+          1.0f, //alpha,
+          Afp32.data(),
+          k_,
+          Bfp32.data(),
+          n_,
+          0.f, //beta,
+          Cfp32_mkldnn.data(),
+          n_);
+      end = chrono::high_resolution_clock::now();
+      if (i >= NWARMUP) {
+        auto dur = chrono::duration_cast<chrono::nanoseconds>(end - start);
+        ttot += dur.count();
+      }
+    }
+    ((volatile char*)(llc.data()));
+
+    cout << setw(6) << m << ", " << setw(6) << n << ", " << setw(6) << k << ", "
+         << setw(16) << runType << ", "
+#ifdef FBGEMM_MEASURE_TIME_BREAKDOWN
+         << setw(16) << 0 << ", " << setw(16) << 0 << ", " << setw(16) << 0
+         << ", " << setw(16) << 0 << ", "
+#endif
+         << setw(5) << fixed << setw(5) << setprecision(1) << (static_cast<double>(NITER) * nops) / ttot
+         << endl;
+
+    // XXX What is this for?
+    for (auto i = 0; i < Cfp32_mkl.size(); ++i) {
+      Cint32_mkldnn[i] = (int32_t)Cfp32_mkldnn[i];
+    }
+
+    ttot = 0.0;
+    runType = "DNN_s8u8";
+    for (auto i = 0; i < NWARMUP + NITER; ++i) {
+      llc_flush(llc);
+      start = chrono::high_resolution_clock::now();
+      mkldnn_gemm_u8s8s32(
+          'N',
+          'N',
+          'F',
+          m_,
+          n_,
+          k_,
+          1.0f, //alpha,
+          Aint8.data(),
+          k_,
+          0, // A offset
+          Bint8.data(),
+          n_,
+          0, // B offset
+          0.f, //beta,
+          Cint32_mkldnn_s8u8s32.data(),
+          n_,
+          co);
+      end = chrono::high_resolution_clock::now();
+      if (i >= NWARMUP) {
+        auto dur = chrono::duration_cast<chrono::nanoseconds>(end - start);
+        ttot += dur.count();
+      }
+    }
+    ((volatile char*)(llc.data()));
+
+    cout << setw(6) << m << ", " << setw(6) << n << ", " << setw(6) << k << ", "
+         << setw(16) << runType << ", "
+#ifdef FBGEMM_MEASURE_TIME_BREAKDOWN
+         << setw(16) << 0 << ", " << setw(16) << 0 << ", " << setw(16) << 0
+         << ", " << setw(16) << 0 << ", "
+#endif
+         << setw(5) << fixed << setw(5) << setprecision(1) << (static_cast<double>(NITER) * nops) / ttot
+         << endl;
+
+    compare_buffers(Cint32_ref.data(), Cint32_mkldnn_s8u8s32.data(), m, n, n, 5);
+
+
+    ttot = 0.0;
+    runType = "DNN_packapi_s8u8";
+
+    mkldnn::impl::cpu::gemm_s8u8s32_pack_get_size(
+            "A", "N", "N", &n, &m, &k, &n, &k, &packedBSize);
+    packedB = (void *) mkl_malloc(packedBSize, 64);
+    mkldnn::impl::cpu::gemm_s8u8s32_pack("A", "N", "N", &n, &m, &k, &n, &k,
+            Bint8.data(), packedB);
+    // TODO Error handling.
+
+    for (auto i = 0; i < NWARMUP + NITER; ++i) {
+      llc_flush(llc);
+      start = chrono::high_resolution_clock::now();
+      mkldnn::impl::cpu::gemm_s8u8s32_compute(
+          "P",
+          "N",
+          "F",
+          &n,
+          &m,
+          &k,
+          (const int8_t *)packedB,
+          &n,
+          (const uint8_t *)Aint8.data(),
+          &k,
+          &beta,
+          Cint32_mkldnn_packapi_s8u8s32.data(),
+          &n,
+          co);
+      end = chrono::high_resolution_clock::now();
+      if (i >= NWARMUP) {
+        auto dur = chrono::duration_cast<chrono::nanoseconds>(end - start);
+        ttot += dur.count();
+      }
+    }
+    ((volatile char*)(llc.data()));
+
+    cout << setw(6) << m << ", " << setw(6) << n << ", " << setw(6) << k << ", "
+         << setw(16) << runType << ", "
+#ifdef FBGEMM_MEASURE_TIME_BREAKDOWN
+         << setw(16) << 0 << ", " << setw(16) << 0 << ", " << setw(16) << 0
+         << ", " << setw(16) << 0 << ", "
+#endif
+         << setw(5) << fixed << setw(5) << setprecision(1) << (static_cast<double>(NITER) * nops) / ttot
+         << endl;
+
+    mkl_free(packedB);
+    compare_buffers(Cint32_ref.data(), Cint32_mkldnn_packapi_s8u8s32.data(),
+            m, n, n, 5);
 #endif
 
     vector<int32_t> row_offsets(m);
-
-    matmul_u8i8acc32_ref(
-        m, n, k, k, n, n, Aint8.data(), Bint8.data(), Cint32_ref.data());
 
     // printMatrix(matrix_op_t::NoTranspose, Bint8.data(), k, n, n, "B
     // unpacked");

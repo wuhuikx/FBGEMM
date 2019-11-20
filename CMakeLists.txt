@@ -10,8 +10,8 @@ project(fbgemm VERSION 0.1 LANGUAGES CXX C)
 set(FBGEMM_LIBRARY_TYPE "default" CACHE STRING
   "Type of library (shared, static, or default) to build")
 set_property(CACHE FBGEMM_LIBRARY_TYPE PROPERTY STRINGS default static shared)
-option(FBGEMM_BUILD_TESTS "Build fbgemm unit tests" ON)
 option(FBGEMM_BUILD_BENCHMARKS "Build fbgemm benchmarks" ON)
+option(FBGEMM_BUILD_TESTS "Build fbgemm unit tests" ON)
 
 if(FBGEMM_BUILD_TESTS)
   enable_testing()

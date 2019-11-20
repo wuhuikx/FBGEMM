@@ -22,8 +22,10 @@ INCLUDE(CheckFunctionExists)
 # Intel Compiler Suite
 SET(INTEL_COMPILER_DIR "/opt/intel" CACHE STRING
   "Root directory of the Intel Compiler Suite (contains ipp, mkl, etc.)")
-SET(INTEL_MKL_DIR "/opt/intel/mkl" CACHE STRING
+SET(INTEL_MKL_DIR "/home/huiwu1/src/mkl2019_3" CACHE STRING
   "Root directory of the Intel MKL (standalone)")
+#SET(INTEL_MKL_DIR "/opt/intel/mkl" CACHE STRING
+#  "Root directory of the Intel MKL (standalone)")
 SET(INTEL_MKL_SEQUENTIAL OFF CACHE BOOL
   "Force using the sequential (non threaded) libraries")
 
