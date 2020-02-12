@@ -119,7 +119,7 @@ class CodeGenBase {
       int NCB,
       int KCB,
       int MR,
-      int NR) {
+      int NR, int min = 0) {
     std::ostringstream oss;
     oss << "gemm_";
     if (std::is_same<accT, std::int16_t>::value) {
